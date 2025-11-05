@@ -1,0 +1,11 @@
+gateway
+*.exe
+*.test
+*.out
+.env
+.env.*
+*.pem
+*.key
+vendor/
+.idea/
+.vscode/
