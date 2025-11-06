@@ -1,0 +1,67 @@
+server:
+  addr: ":8080"
+  read_timeout: 15s
+  write_timeout: 15s
+  idle_timeout: 60s
+  # tls:
+  #   cert_file: /path/to/cert.pem
+  #   key_file: /path/to/key.pem
+
+defaults:
+  health_check:
+    interval: 10s
+    timeout: 2s
+    path: /health
+  circuit_breaker:
+    max_failures: 5
+    timeout: 30s
+  rate_limit:
+    rate: 100     # tokens per second (global default)
+    burst: 200    # max burst size
+
+routes:
+  - path: /api/users
+    strip_path: true
+    balancer: round-robin     # round-robin | least-conn | weighted
+    backends:
+      - url: http://localhost:8081
+        weight: 1
+      - url: http://localhost:8082
+        weight: 1
+    rate_limit:               # per-route override
+      rate: 50
+      burst: 100
+    cors:
+      allow_origins:
+        - "https://example.com"
+        - "https://app.example.com"
+      allow_methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+      allow_headers:
+        - Content-Type
+        - Authorization
+      max_age: 86400
+
+  - path: /api/orders
+    strip_path: true
+    balancer: least-conn
+    backends:
+      - url: http://localhost:8083
+      - url: http://localhost:8084
+    auth:
+      jwt_secret: your-secret-key-here
+    rate_limit:
+      rate: 30
+      burst: 60
+
+  - path: /api/products
+    strip_path: false
+    balancer: weighted
+    backends:
+      - url: http://localhost:8085
+        weight: 3
+      - url: http://localhost:8086
+        weight: 1
