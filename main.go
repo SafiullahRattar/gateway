@@ -2,35 +2,51 @@ package main
 
 import (
 	"flag"
-	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/SafiullahRattar/gateway/internal/config"
+	"github.com/SafiullahRattar/gateway/internal/proxy"
 )
 
 func main() {
-	addr := flag.String("addr", ":8080", "listen address")
+	configPath := flag.String("config", "config.yaml", "path to configuration file")
 	flag.Parse()
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "gateway ok")
-	})
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		slog.Error("failed to load config", "err", err)
+		os.Exit(1)
+	}
 
-	srv := &http.Server{Addr: *addr, Handler: mux}
+	gw, err := proxy.New(cfg)
+	if err != nil {
+		slog.Error("failed to create gateway", "err", err)
+		os.Exit(1)
+	}
+
+	srv := &http.Server{
+		Addr:         cfg.Server.Addr,
+		Handler:      gw,
+		ReadTimeout:  cfg.Server.ReadTimeout,
+		WriteTimeout: cfg.Server.WriteTimeout,
+	}
 
 	go func() {
-		log.Printf("starting gateway on %s", *addr)
+		slog.Info("gateway starting", "addr", cfg.Server.Addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal(err)
+			slog.Error("server error", "err", err)
+			os.Exit(1)
 		}
 	}()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("shutting down")
+	slog.Info("shutting down")
+	gw.Stop()
 	srv.Close()
 }
