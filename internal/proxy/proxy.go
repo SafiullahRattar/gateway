@@ -4,10 +4,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
-	"net/url"
 	"strings"
 	"sync"
 
+	"github.com/SafiullahRattar/gateway/internal/balancer"
 	"github.com/SafiullahRattar/gateway/internal/config"
 )
 
@@ -53,17 +53,18 @@ func (g *Gateway) buildRoutes(cfg *config.Config) error {
 	mux := http.NewServeMux()
 
 	for _, route := range cfg.Routes {
-		if len(route.Backends) == 0 {
-			continue
+		backends, err := buildBackends(route.Backends)
+		if err != nil {
+			return err
 		}
 
-		target, err := url.Parse(route.Backends[0].URL)
+		strategy, err := balancer.New(route.Balancer)
 		if err != nil {
 			return err
 		}
 
 		rp := &httputil.ReverseProxy{
-			Director: makeDirector(route, target),
+			Director: makeDirector(route, backends, strategy),
 			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 				slog.Error("proxy error", "err", err, "path", r.URL.Path)
 				http.Error(w, "bad gateway", http.StatusBadGateway)
@@ -84,10 +85,30 @@ func (g *Gateway) buildRoutes(cfg *config.Config) error {
 	return nil
 }
 
-func makeDirector(route config.Route, target *url.URL) func(*http.Request) {
+func buildBackends(cfgBackends []config.BackendConfig) ([]*balancer.Backend, error) {
+	backends := make([]*balancer.Backend, 0, len(cfgBackends))
+	for _, bc := range cfgBackends {
+		b, err := balancer.NewBackend(bc.URL, bc.Weight)
+		if err != nil {
+			return nil, err
+		}
+		backends = append(backends, b)
+	}
+	return backends, nil
+}
+
+func makeDirector(route config.Route, backends []*balancer.Backend, strategy balancer.Strategy) func(*http.Request) {
 	return func(r *http.Request) {
-		r.URL.Scheme = target.Scheme
-		r.URL.Host = target.Host
+		backend := strategy.Next(backends)
+		if backend == nil {
+			slog.Error("no healthy backends", "route", route.Path)
+			return
+		}
+
+		backend.IncrConns()
+
+		r.URL.Scheme = backend.URL.Scheme
+		r.URL.Host = backend.URL.Host
 
 		if route.StripPath {
 			r.URL.Path = strings.TrimPrefix(r.URL.Path, route.Path)
@@ -96,6 +117,6 @@ func makeDirector(route config.Route, target *url.URL) func(*http.Request) {
 			}
 		}
 
-		r.Host = target.Host
+		r.Host = backend.URL.Host
 	}
 }
